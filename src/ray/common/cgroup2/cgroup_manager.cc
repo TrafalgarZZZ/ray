@@ -441,7 +441,7 @@ Status CgroupManager::CreateActorWorkerCgroup(const std::string &actor_id,
   if (!actor_resource_isolation_enabled_) {
     return Status::InvalidArgument("Actor resource isolation is not enabled.");
   }
-  if (actor_worker_cgroups_.contains(worker_id)) {
+  if (actor_worker_cgroups_.find(worker_id) != actor_worker_cgroups_.end()) {
     return Status::AlreadyExists("An actor cgroup already exists for worker " + worker_id);
   }
 

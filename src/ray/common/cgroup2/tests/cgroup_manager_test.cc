@@ -151,14 +151,14 @@ TEST(CgroupManagerTest, CreatesAndRemovesActorWorkerCgroup) {
                                             1.5,
                                             512 * 1024 * 1024)
                   .ok());
-  ASSERT_TRUE(cgroups->contains(actor_cgroup));
+  ASSERT_NE(cgroups->find(actor_cgroup), cgroups->end());
   EXPECT_EQ(cgroups->at(actor_cgroup).constraints_.at("cpu.max"), "150000 100000");
   EXPECT_EQ(cgroups->at(actor_cgroup).constraints_.at("memory.high"), "536870912");
   EXPECT_EQ(cgroups->at(actor_cgroup).constraints_.at("memory.max"), "536870912");
   EXPECT_EQ(cgroups->at(actor_cgroup).constraints_.at("memory.oom.group"), "1");
 
   EXPECT_TRUE(manager->RemoveActorWorkerCgroup("worker456").ok());
-  EXPECT_FALSE(cgroups->contains(actor_cgroup));
+  EXPECT_EQ(cgroups->find(actor_cgroup), cgroups->end());
   EXPECT_TRUE(manager->RemoveActorWorkerCgroup("worker456").ok());
 }
 
