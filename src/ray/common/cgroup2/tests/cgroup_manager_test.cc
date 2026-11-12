@@ -142,7 +142,7 @@ TEST(CgroupManagerTest, CreatesAndRemovesActorWorkerCgroup) {
   auto manager = std::move(manager_or.value());
 
   const std::string actor_cgroup =
-      "/sys/fs/cgroup/ray-node_id_123/user/actor-workers/"
+      "/sys/fs/cgroup/ray-node_node_id_123/user/actor-workers/"
       "actor-actor123-worker-worker456";
   ASSERT_TRUE(manager
                   ->CreateActorWorkerCgroup("actor123",
