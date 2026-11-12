@@ -1455,6 +1455,7 @@ def init(
     namespace: Optional[str] = None,
     runtime_env: Optional[Union[Dict[str, Any], "RuntimeEnv"]] = None,  # noqa: F821
     enable_resource_isolation: bool = False,
+    enable_actor_resource_isolation: bool = False,
     cgroup_path: Optional[str] = None,
     system_reserved_cpu: Optional[float] = None,
     system_reserved_memory: Optional[int] = None,
@@ -1567,6 +1568,9 @@ def init(
             memory and cpu resources for ray system processes. To use, only cgroupv2 (not cgroupv1)
             must be enabled with read and write permissions for the raylet. Cgroup memory and
             cpu controllers must also be enabled.
+        enable_actor_resource_isolation: Create a dedicated cgroup for every Actor
+            worker and enforce the Actor's declared CPU and memory resources. This
+            option requires enable_resource_isolation to be True.
         cgroup_path: The path for the cgroup the raylet should use to enforce resource isolation.
             By default, the cgroup used for resource isolation will be /sys/fs/cgroup.
             The process starting ray must have read/write permissions to this path.
@@ -1873,6 +1877,7 @@ def init(
 
         resource_isolation_config = ResourceIsolationConfig(
             enable_resource_isolation=enable_resource_isolation,
+            enable_actor_resource_isolation=enable_actor_resource_isolation,
             cgroup_path=cgroup_path,
             system_reserved_cpu=system_reserved_cpu,
             system_reserved_memory=system_reserved_memory,

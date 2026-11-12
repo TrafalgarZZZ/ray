@@ -122,6 +122,46 @@ TEST(CgroupManagerTest, CreateReturnsInvalidArgumentIfConstraintValuesOutOfBound
   ASSERT_EQ(cgroups->begin()->second, base_cgroup);
 }
 
+TEST(CgroupManagerTest, CreatesAndRemovesActorWorkerCgroup) {
+  auto cgroups =
+      std::make_shared<std::unordered_map<std::string, FakeCgroup>>();
+  cgroups->emplace("/sys/fs/cgroup",
+                   FakeCgroup{"/sys/fs/cgroup", {}, {}, {"cpu", "memory"}, {}});
+  auto driver = FakeCgroupDriver::Create(cgroups);
+
+  auto manager_or = CgroupManager::Create("/sys/fs/cgroup",
+                                          "node_id_123",
+                                          1000,
+                                          1024,
+                                          1024,
+                                          1024 * 1024,
+                                          2 * 1024 * 1024,
+                                          std::move(driver),
+                                          /*enable_actor_resource_isolation=*/true);
+  ASSERT_TRUE(manager_or.ok()) << manager_or.status().ToString();
+  auto manager = std::move(manager_or.value());
+
+  const std::string actor_cgroup =
+      "/sys/fs/cgroup/ray-node_id_123/user/actor-workers/"
+      "actor-actor123-worker-worker456";
+  ASSERT_TRUE(manager
+                  ->CreateActorWorkerCgroup("actor123",
+                                            "worker456",
+                                            "1234",
+                                            1.5,
+                                            512 * 1024 * 1024)
+                  .ok());
+  ASSERT_TRUE(cgroups->contains(actor_cgroup));
+  EXPECT_EQ(cgroups->at(actor_cgroup).constraints_.at("cpu.max"), "150000 100000");
+  EXPECT_EQ(cgroups->at(actor_cgroup).constraints_.at("memory.high"), "536870912");
+  EXPECT_EQ(cgroups->at(actor_cgroup).constraints_.at("memory.max"), "536870912");
+  EXPECT_EQ(cgroups->at(actor_cgroup).constraints_.at("memory.oom.group"), "1");
+
+  EXPECT_TRUE(manager->RemoveActorWorkerCgroup("worker456").ok());
+  EXPECT_FALSE(cgroups->contains(actor_cgroup));
+  EXPECT_TRUE(manager->RemoveActorWorkerCgroup("worker456").ok());
+}
+
 TEST(CgroupManagerTest, CreateSucceedsWithCleanupInOrder) {
   std::shared_ptr<std::unordered_map<std::string, FakeCgroup>> cgroups =
       std::make_shared<std::unordered_map<std::string, FakeCgroup>>();

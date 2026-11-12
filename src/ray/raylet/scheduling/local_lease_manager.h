@@ -90,6 +90,12 @@ class LocalLeaseManager : public LocalLeaseManagerInterface {
       size_t max_pinned_lease_arguments_bytes,
       SchedulerMetrics &scheduler_metrics,
       ClockInterface &clock,
+      std::function<Status(const std::string &actor_id,
+                           const std::string &worker_id,
+                           const std::string &pid,
+                           double cpu_limit,
+                           int64_t memory_limit_bytes)>
+          create_actor_worker_cgroup = nullptr,
       int64_t sched_cls_cap_interval_ms =
           RayConfig::instance().worker_cap_initial_backoff_delay_ms());
 
@@ -375,6 +381,13 @@ class LocalLeaseManager : public LocalLeaseManagerInterface {
 
   /// Clock used to read the current time.
   ClockInterface &clock_;
+
+  std::function<Status(const std::string &actor_id,
+                       const std::string &worker_id,
+                       const std::string &pid,
+                       double cpu_limit,
+                       int64_t memory_limit_bytes)>
+      create_actor_worker_cgroup_;
 
   /// Whether or not to enable the worker process cap.
   const bool sched_cls_cap_enabled_;

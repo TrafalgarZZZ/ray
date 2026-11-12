@@ -76,6 +76,18 @@ class CgroupManagerInterface {
   */
   virtual Status AddProcessToSystemCgroup(const std::string &pid) = 0;
 
+  /// Creates a dedicated cgroup for an actor worker, applies its lifetime CPU and
+  /// memory limits, and moves the worker process into it.
+  virtual Status CreateActorWorkerCgroup(const std::string &actor_id,
+                                         const std::string &worker_id,
+                                         const std::string &pid,
+                                         double cpu_limit,
+                                         int64_t memory_limit_bytes) = 0;
+
+  /// Moves any remaining processes back to the shared workers cgroup and removes
+  /// the dedicated actor worker cgroup. This operation is idempotent.
+  virtual Status RemoveActorWorkerCgroup(const std::string &worker_id) = 0;
+
   /**
     @return the path to the system cgroup.
   */
@@ -121,6 +133,7 @@ class CgroupManagerInterface {
   inline static const std::string kSystemCgroupName = "system";
   inline static const std::string kUserCgroupName = "user";
   inline static const std::string kWorkersCgroupName = "workers";
+  inline static const std::string kActorWorkersCgroupName = "actor-workers";
   inline static const std::string kNonRayCgroupName = "non-ray";
   inline static const std::string kLeafCgroupName = "leaf";
 

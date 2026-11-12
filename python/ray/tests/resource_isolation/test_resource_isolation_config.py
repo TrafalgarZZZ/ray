@@ -34,6 +34,29 @@ def _all_processes(
 def test_resource_isolation_is_disabled_by_default():
     resource_isolation_config = ResourceIsolationConfig()
     assert not resource_isolation_config.is_enabled()
+    assert not resource_isolation_config.is_actor_resource_isolation_enabled()
+
+
+def test_actor_resource_isolation_requires_resource_isolation():
+    with pytest.raises(
+        ValueError,
+        match="enable_actor_resource_isolation requires enable_resource_isolation",
+    ):
+        ResourceIsolationConfig(enable_actor_resource_isolation=True)
+
+
+def test_actor_resource_isolation_can_be_enabled(monkeypatch):
+    monkeypatch.setattr(utils, "get_num_cpus", lambda *args, **kwargs: 8)
+    monkeypatch.setattr(
+        common_utils, "get_system_memory", lambda *args, **kwargs: 16 * 1024**3
+    )
+    config = ResourceIsolationConfig(
+        enable_resource_isolation=True,
+        enable_actor_resource_isolation=True,
+        system_reserved_cpu=1,
+        system_reserved_memory=1024**3,
+    )
+    assert config.is_actor_resource_isolation_enabled()
 
 
 def test_disabled_resource_isolation_with_overrides_raises_value_error():

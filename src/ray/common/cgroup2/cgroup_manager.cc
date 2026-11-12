@@ -15,6 +15,7 @@
 #include "ray/common/cgroup2/cgroup_manager.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -35,8 +36,11 @@ namespace ray {
 
 CgroupManager::CgroupManager(std::string base_cgroup,
                              const std::string &node_id,
+                             bool enable_actor_resource_isolation,
                              std::unique_ptr<CgroupDriverInterface> cgroup_driver)
-    : base_cgroup_(std::move(base_cgroup)), cgroup_driver_(std::move(cgroup_driver)) {
+    : base_cgroup_(std::move(base_cgroup)),
+      actor_resource_isolation_enabled_(enable_actor_resource_isolation),
+      cgroup_driver_(std::move(cgroup_driver)) {
   node_cgroup_ = base_cgroup_ + std::filesystem::path::preferred_separator +
                  absl::StrFormat("%s_%s", kNodeCgroupName, node_id);
   system_cgroup_ =
@@ -47,33 +51,52 @@ CgroupManager::CgroupManager(std::string base_cgroup,
       node_cgroup_ + std::filesystem::path::preferred_separator + kUserCgroupName;
   workers_cgroup_ =
       user_cgroup_ + std::filesystem::path::preferred_separator + kWorkersCgroupName;
+  actor_workers_cgroup_ = user_cgroup_ + std::filesystem::path::preferred_separator +
+                          kActorWorkersCgroupName;
   non_ray_cgroup_ =
       user_cgroup_ + std::filesystem::path::preferred_separator + kNonRayCgroupName;
 }
 
 CgroupManager::~CgroupManager() {
+  while (!actor_worker_cgroups_.empty()) {
+    const std::string worker_id = actor_worker_cgroups_.begin()->first;
+    Status status = CleanupActorWorkerCgroup(worker_id);
+    if (!status.ok()) {
+      RAY_LOG(WARNING) << "Failed to clean up actor worker cgroup for worker "
+                       << worker_id << ": " << status.ToString();
+      actor_worker_cgroups_.erase(worker_id);
+    }
+  }
   while (!cleanup_operations_.empty()) {
     cleanup_operations_.pop_back();
   }
 }
 
 CgroupManager::CgroupManager(CgroupManager &&other)
-    : node_cgroup_(std::move(other.node_cgroup_)),
+    : base_cgroup_(std::move(other.base_cgroup_)),
+      node_cgroup_(std::move(other.node_cgroup_)),
       system_cgroup_(std::move(other.system_cgroup_)),
       system_leaf_cgroup_(std::move(other.system_leaf_cgroup_)),
       user_cgroup_(std::move(other.user_cgroup_)),
       workers_cgroup_(std::move(other.workers_cgroup_)),
+      actor_workers_cgroup_(std::move(other.actor_workers_cgroup_)),
       non_ray_cgroup_(std::move(other.non_ray_cgroup_)),
+      actor_resource_isolation_enabled_(other.actor_resource_isolation_enabled_),
+      actor_worker_cgroups_(std::move(other.actor_worker_cgroups_)),
       cleanup_operations_(std::move(other.cleanup_operations_)),
       cgroup_driver_(std::move(other.cgroup_driver_)) {}
 
 CgroupManager &CgroupManager::operator=(CgroupManager &&other) {
+  base_cgroup_ = std::move(other.base_cgroup_);
   node_cgroup_ = std::move(other.node_cgroup_);
   system_cgroup_ = std::move(other.system_cgroup_);
   system_leaf_cgroup_ = std::move(other.system_leaf_cgroup_);
   user_cgroup_ = std::move(other.user_cgroup_);
   workers_cgroup_ = std::move(other.workers_cgroup_);
+  actor_workers_cgroup_ = std::move(other.actor_workers_cgroup_);
   non_ray_cgroup_ = std::move(other.non_ray_cgroup_);
+  actor_resource_isolation_enabled_ = other.actor_resource_isolation_enabled_;
+  actor_worker_cgroups_ = std::move(other.actor_worker_cgroups_);
   cleanup_operations_ = std::move(other.cleanup_operations_);
   cgroup_driver_ = std::move(other.cgroup_driver_);
   return *this;
@@ -87,7 +110,8 @@ StatusOr<std::unique_ptr<CgroupManager>> CgroupManager::Create(
     const int64_t system_memory_bytes_low,
     const int64_t user_memory_high_bytes,
     const int64_t user_memory_max_bytes,
-    std::unique_ptr<CgroupDriverInterface> cgroup_driver) {
+    std::unique_ptr<CgroupDriverInterface> cgroup_driver,
+    bool enable_actor_resource_isolation) {
   if (!cpu_weight_constraint_.IsValid(system_reserved_cpu_weight)) {
     return Status::InvalidArgument(
         absl::StrFormat(" Invalid constraint %s=%d. %s must be in the range [%d, %d].",
@@ -166,7 +190,10 @@ StatusOr<std::unique_ptr<CgroupManager>> CgroupManager::Create(
   }
 
   std::unique_ptr<CgroupManager> cgroup_manager = std::unique_ptr<CgroupManager>(
-      new CgroupManager(std::move(base_cgroup), node_id, std::move(cgroup_driver)));
+      new CgroupManager(std::move(base_cgroup),
+                        node_id,
+                        enable_actor_resource_isolation,
+                        std::move(cgroup_driver)));
 
   RAY_RETURN_NOT_OK(cgroup_manager->Initialize(system_reserved_cpu_weight,
                                                system_memory_bytes_min,
@@ -301,6 +328,11 @@ Status CgroupManager::Initialize(int64_t system_reserved_cpu_weight,
   RAY_RETURN_NOT_OK(cgroup_driver_->CreateCgroup(workers_cgroup_));
   RegisterDeleteCgroup(workers_cgroup_);
 
+  if (actor_resource_isolation_enabled_) {
+    RAY_RETURN_NOT_OK(cgroup_driver_->CreateCgroup(actor_workers_cgroup_));
+    RegisterDeleteCgroup(actor_workers_cgroup_);
+  }
+
   // Move all processes from the base_cgroup into the system_leaf_cgroup to make sure
   RAY_RETURN_NOT_OK(cgroup_driver_->CreateCgroup(non_ray_cgroup_));
   RegisterDeleteCgroup(non_ray_cgroup_);
@@ -331,6 +363,15 @@ Status CgroupManager::Initialize(int64_t system_reserved_cpu_weight,
     RAY_RETURN_NOT_OK(
         cgroup_driver_->EnableController(*memory_controlled_cgroup, "memory"));
     RegisterDisableController(*memory_controlled_cgroup, "memory");
+  }
+
+  if (actor_resource_isolation_enabled_) {
+    RAY_RETURN_NOT_OK(cgroup_driver_->EnableController(user_cgroup_, "cpu"));
+    RegisterDisableController(user_cgroup_, "cpu");
+    RAY_RETURN_NOT_OK(cgroup_driver_->EnableController(actor_workers_cgroup_, "cpu"));
+    RegisterDisableController(actor_workers_cgroup_, "cpu");
+    RAY_RETURN_NOT_OK(cgroup_driver_->EnableController(actor_workers_cgroup_, "memory"));
+    RegisterDisableController(actor_workers_cgroup_, "memory");
   }
 
   RAY_RETURN_NOT_OK(
@@ -390,6 +431,86 @@ Status CgroupManager::AddProcessToWorkersCgroup(const std::string &pid) {
 
 Status CgroupManager::AddProcessToSystemCgroup(const std::string &pid) {
   return AddProcessToCgroup(system_leaf_cgroup_, pid);
+}
+
+Status CgroupManager::CreateActorWorkerCgroup(const std::string &actor_id,
+                                              const std::string &worker_id,
+                                              const std::string &pid,
+                                              double cpu_limit,
+                                              int64_t memory_limit_bytes) {
+  if (!actor_resource_isolation_enabled_) {
+    return Status::InvalidArgument("Actor resource isolation is not enabled.");
+  }
+  if (actor_worker_cgroups_.contains(worker_id)) {
+    return Status::AlreadyExists("An actor cgroup already exists for worker " + worker_id);
+  }
+
+  const std::string cgroup =
+      actor_workers_cgroup_ + std::filesystem::path::preferred_separator + "actor-" +
+      actor_id + "-worker-" + worker_id;
+  RAY_RETURN_NOT_OK(cgroup_driver_->CreateCgroup(cgroup));
+
+  auto rollback = [this, &cgroup](const Status &status) {
+    Status delete_status = cgroup_driver_->DeleteCgroup(cgroup);
+    if (!delete_status.ok()) {
+      RAY_LOG(WARNING) << "Failed to roll back actor worker cgroup " << cgroup << ": "
+                       << delete_status.ToString();
+    }
+    return status;
+  };
+
+  if (cpu_limit > 0) {
+    constexpr int64_t kCpuPeriodUs = 100000;
+    const int64_t quota_us =
+        static_cast<int64_t>(std::ceil(cpu_limit * kCpuPeriodUs));
+    Status status = cgroup_driver_->AddConstraint(
+        cgroup, "cpu.max", absl::StrFormat("%d %d", quota_us, kCpuPeriodUs));
+    if (!status.ok()) {
+      return rollback(status);
+    }
+  }
+  if (memory_limit_bytes > 0) {
+    const std::string memory_limit = std::to_string(memory_limit_bytes);
+    Status status =
+        cgroup_driver_->AddConstraint(cgroup, "memory.high", memory_limit);
+    if (!status.ok()) {
+      return rollback(status);
+    }
+    status = cgroup_driver_->AddConstraint(cgroup, "memory.max", memory_limit);
+    if (!status.ok()) {
+      return rollback(status);
+    }
+    status = cgroup_driver_->AddConstraint(cgroup, "memory.oom.group", "1");
+    if (!status.ok()) {
+      return rollback(status);
+    }
+  }
+
+  Status status = AddProcessToCgroup(cgroup, pid);
+  if (!status.ok()) {
+    return rollback(status);
+  }
+  actor_worker_cgroups_.emplace(worker_id, cgroup);
+  RAY_LOG(INFO) << "Created actor worker cgroup " << cgroup << " for pid " << pid
+                << " with CPU limit " << cpu_limit << " and memory limit "
+                << memory_limit_bytes << " bytes.";
+  return Status::OK();
+}
+
+Status CgroupManager::CleanupActorWorkerCgroup(const std::string &worker_id) {
+  auto it = actor_worker_cgroups_.find(worker_id);
+  if (it == actor_worker_cgroups_.end()) {
+    return Status::OK();
+  }
+  const std::string cgroup = it->second;
+  RAY_RETURN_NOT_OK(cgroup_driver_->MoveAllProcesses(cgroup, workers_cgroup_));
+  RAY_RETURN_NOT_OK(cgroup_driver_->DeleteCgroup(cgroup));
+  actor_worker_cgroups_.erase(it);
+  return Status::OK();
+}
+
+Status CgroupManager::RemoveActorWorkerCgroup(const std::string &worker_id) {
+  return CleanupActorWorkerCgroup(worker_id);
 }
 
 std::string CgroupManager::GetSystemCgroupPath() const { return system_cgroup_; }

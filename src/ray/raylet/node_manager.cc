@@ -1578,6 +1578,14 @@ void NodeManager::DisconnectClient(const std::shared_ptr<ClientConnection> &clie
       }
     }
 
+    Status actor_cgroup_cleanup_status =
+        cgroup_manager_->RemoveActorWorkerCgroup(worker->WorkerId().Hex());
+    if (!actor_cgroup_cleanup_status.ok()) {
+      RAY_LOG(WARNING).WithField(worker->WorkerId())
+          << "Failed to remove actor worker cgroup: "
+          << actor_cgroup_cleanup_status.ToString();
+    }
+
     // Attempt per-worker process-group cleanup before removing the worker. The
     // worker is its own process-group leader, so killpg also targets the worker
     // process itself. The timing therefore differs by disconnect type:

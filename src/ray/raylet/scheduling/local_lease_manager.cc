@@ -65,6 +65,12 @@ LocalLeaseManager::LocalLeaseManager(
     size_t max_pinned_lease_arguments_bytes,
     SchedulerMetrics &scheduler_metrics,
     ClockInterface &clock,
+    std::function<Status(const std::string &actor_id,
+                         const std::string &worker_id,
+                         const std::string &pid,
+                         double cpu_limit,
+                         int64_t memory_limit_bytes)>
+        create_actor_worker_cgroup,
     int64_t sched_cls_cap_interval_ms)
     : self_node_id_(self_node_id),
       self_scheduling_node_id_(self_node_id.Binary()),
@@ -79,6 +85,7 @@ LocalLeaseManager::LocalLeaseManager(
       max_pinned_lease_arguments_bytes_(max_pinned_lease_arguments_bytes),
       scheduler_metrics_(scheduler_metrics),
       clock_(clock),
+      create_actor_worker_cgroup_(std::move(create_actor_worker_cgroup)),
       sched_cls_cap_enabled_(RayConfig::instance().worker_cap_enabled()),
       sched_cls_cap_interval_ms_(sched_cls_cap_interval_ms),
       sched_cls_cap_max_ms_(RayConfig::instance().worker_cap_max_backoff_delay_ms()) {}
@@ -691,6 +698,54 @@ bool LocalLeaseManager::PoppedWorkerHandler(
     // the worker.
     RAY_LOG(DEBUG) << "Granting lease " << lease_id << " to worker "
                    << worker->WorkerId();
+
+    const auto &lease_spec = lease.GetLeaseSpecification();
+    if (lease_spec.IsActorCreationTask() && create_actor_worker_cgroup_) {
+      double cpu_limit = 0;
+      double memory_limit = 0;
+      for (const auto &[resource_id, quantity] :
+           lease_spec.GetRequiredResources().Resources()) {
+        auto placement_group_resource = ParsePgFormattedResource(
+            resource_id.Binary(), /*for_wildcard_resource=*/true,
+            /*for_indexed_resource=*/true);
+        const std::string original_resource = placement_group_resource.has_value()
+                                                  ? placement_group_resource->original_resource
+                                                  : resource_id.Binary();
+        if (original_resource == scheduling::ResourceID::CPU().Binary()) {
+          cpu_limit = std::max(cpu_limit, quantity.Double());
+        } else if (original_resource == scheduling::ResourceID::Memory().Binary()) {
+          memory_limit = std::max(memory_limit, quantity.Double());
+        }
+      }
+
+      Status cgroup_status = create_actor_worker_cgroup_(
+          lease_spec.ActorId().Hex(),
+          worker->WorkerId().Hex(),
+          std::to_string(worker->GetProcess().GetId()),
+          cpu_limit,
+          static_cast<int64_t>(memory_limit));
+      if (!cgroup_status.ok()) {
+        const std::string failure_message = absl::StrCat(
+            "Failed to configure resource isolation for Actor ",
+            lease_spec.ActorId().Hex(),
+            ": ",
+            cgroup_status.ToString());
+        RAY_LOG(ERROR) << failure_message;
+        cluster_resource_scheduler_.GetLocalResourceManager().ReleaseWorkerResources(
+            work->allocated_instances_);
+        work->allocated_instances_ = nullptr;
+        ReleaseLeaseArgs(lease_id);
+        RemoveFromGrantedLeasesIfExists(lease);
+        worker_pool_.DisconnectWorker(worker, rpc::WorkerExitType::SYSTEM_ERROR);
+        CancelLeases(
+            [lease_id](const auto &w) {
+              return lease_id == w->lease_.GetLeaseSpecification().LeaseId();
+            },
+            rpc::RequestWorkerLeaseReply::SCHEDULING_CANCELLED_WORKER_STARTUP_FAILED,
+            failure_message);
+        return true;
+      }
+    }
 
     Grant(worker, leased_workers_, work->allocated_instances_, lease, reply_callbacks);
     erase_from_leases_to_grant_queue_fn(work, scheduling_class);

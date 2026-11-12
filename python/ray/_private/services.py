@@ -2021,6 +2021,8 @@ def start_raylet(
             f"system_reserved_memory={resource_isolation_config.system_reserved_memory}."
         )
         command.append("--enable-resource-isolation")
+        if resource_isolation_config.is_actor_resource_isolation_enabled():
+            command.append("--enable-actor-resource-isolation")
         command.append(f"--cgroup-path={resource_isolation_config.cgroup_path}")
         command.append(
             f"--system-reserved-cpu-weight={resource_isolation_config.system_reserved_cpu_weight}"

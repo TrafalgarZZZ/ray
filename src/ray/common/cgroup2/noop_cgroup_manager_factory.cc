@@ -22,6 +22,7 @@ namespace ray {
 
 std::unique_ptr<CgroupManagerInterface> CgroupManagerFactory::Create(
     bool enable_resource_isolation,
+    bool enable_actor_resource_isolation,
     std::string cgroup_path,
     const std::string &node_id,
     const int64_t system_reserved_cpu_weight,
@@ -33,6 +34,8 @@ std::unique_ptr<CgroupManagerInterface> CgroupManagerFactory::Create(
         << "Raylet started with --enable_resource_isolation. Resource isolation is only "
            "supported on Linux. This is likey a misconfiguration.";
   }
+  RAY_CHECK(!enable_actor_resource_isolation || enable_resource_isolation)
+      << "Actor resource isolation requires resource isolation to be enabled.";
   return std::make_unique<NoopCgroupManager>();
 }
 }  // namespace ray

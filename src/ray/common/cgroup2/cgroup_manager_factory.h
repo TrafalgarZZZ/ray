@@ -61,6 +61,7 @@ class CgroupManagerFactory {
   */
   static std::unique_ptr<CgroupManagerInterface> Create(
       bool enable_resource_isolation,
+      bool enable_actor_resource_isolation,
       std::string cgroup_path,
       const std::string &node_id,
       const int64_t system_reserved_cpu_weight,

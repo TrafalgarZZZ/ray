@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -140,6 +141,11 @@ DEFINE_bool(
     "Enables resource isolation through cgroupv2. The raylet will create and "
     "manage a cgroup hierarchy that separates system processes and worker processes "
     "into separate cgroups.");
+DEFINE_bool(enable_actor_resource_isolation,
+            false,
+            "Creates a dedicated cgroup for every Actor worker and enforces the "
+            "Actor's declared CPU and memory resources. Requires "
+            "enable-resource-isolation.");
 DEFINE_string(
     cgroup_path,
     "",
@@ -273,6 +279,7 @@ int main(int argc, char *argv[]) {
   const bool is_head_node = FLAGS_head;
   const std::string labels_json_str = FLAGS_labels;
   const bool enable_resource_isolation = FLAGS_enable_resource_isolation;
+  const bool enable_actor_resource_isolation = FLAGS_enable_actor_resource_isolation;
   const std::string cgroup_path = FLAGS_cgroup_path;
   const int64_t system_reserved_cpu_weight = FLAGS_system_reserved_cpu_weight;
   const int64_t system_reserved_memory_bytes = FLAGS_system_reserved_memory_bytes;
@@ -288,6 +295,7 @@ int main(int argc, char *argv[]) {
   // The lifecycle of CgroupManager will be controlled by NodeManager.
   std::unique_ptr<ray::CgroupManagerInterface> cgroup_manager =
       ray::CgroupManagerFactory::Create(enable_resource_isolation,
+                                        enable_actor_resource_isolation,
                                         std::move(cgroup_path),
                                         node_id,
                                         system_reserved_cpu_weight,
@@ -305,6 +313,24 @@ int main(int argc, char *argv[]) {
         RAY_CHECK_OK(cgroup_mgr.AddProcessToSystemCgroup(pid)) << absl::StrFormat(
             "Failed to move process %s into the system cgroup with error.", pid);
       };
+
+  std::function<ray::Status(const std::string &,
+                            const std::string &,
+                            const std::string &,
+                            double,
+                            int64_t)>
+      create_actor_worker_cgroup_hook;
+  if (enable_actor_resource_isolation) {
+    create_actor_worker_cgroup_hook =
+        [&cgroup_mgr = *cgroup_manager](const std::string &actor_id,
+                                       const std::string &worker_id,
+                                       const std::string &pid,
+                                       double cpu_limit,
+                                       int64_t memory_limit_bytes) {
+          return cgroup_mgr.CreateActorWorkerCgroup(
+              actor_id, worker_id, pid, cpu_limit, memory_limit_bytes);
+        };
+  }
 
   // Configuration for the node manager.
   ray::raylet::NodeManagerConfig node_manager_config;
@@ -1016,7 +1042,8 @@ int main(int argc, char *argv[]) {
         },
         max_task_args_memory,
         scheduler_metrics,
-        clock);
+        clock,
+        create_actor_worker_cgroup_hook);
 
     cluster_lease_manager =
         std::make_unique<ray::raylet::ClusterLeaseManager>(raylet_node_id,

@@ -36,6 +36,7 @@ class ResourceIsolationConfig:
     def __init__(
         self,
         enable_resource_isolation: bool = False,
+        enable_actor_resource_isolation: bool = False,
         cgroup_path: Optional[str] = None,
         system_reserved_cpu: Optional[float] = None,
         system_reserved_memory: Optional[int] = None,
@@ -56,12 +57,19 @@ class ResourceIsolationConfig:
                 and < the total memory available.
         """
         self._resource_isolation_enabled = enable_resource_isolation
+        self._actor_resource_isolation_enabled = enable_actor_resource_isolation
         self.cgroup_path = cgroup_path
         self.system_reserved_memory = system_reserved_memory
         self.system_pids = ""
 
         # cgroupv2 cpu.weight calculated from system_reserved_cpu assumes ray uses all available cores.
         self.system_reserved_cpu_weight: int = None
+
+        if enable_actor_resource_isolation and not enable_resource_isolation:
+            raise ValueError(
+                "enable_actor_resource_isolation requires "
+                "enable_resource_isolation to be True."
+            )
 
         if not enable_resource_isolation:
             if self.cgroup_path:
@@ -97,6 +105,9 @@ class ResourceIsolationConfig:
 
     def is_enabled(self) -> bool:
         return self._resource_isolation_enabled
+
+    def is_actor_resource_isolation_enabled(self) -> bool:
+        return self._actor_resource_isolation_enabled
 
     def add_system_pids(self, system_pids: str):
         """A comma-separated list of pids to move into the system cgroup."""

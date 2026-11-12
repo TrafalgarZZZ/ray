@@ -35,12 +35,15 @@ namespace ray {
 
 std::unique_ptr<CgroupManagerInterface> CgroupManagerFactory::Create(
     bool enable_resource_isolation,
+    bool enable_actor_resource_isolation,
     std::string cgroup_path,
     const std::string &node_id,
     const int64_t system_reserved_cpu_weight,
     const int64_t system_reserved_memory_bytes,
     const std::string &system_pids) {
   if (!enable_resource_isolation) {
+    RAY_CHECK(!enable_actor_resource_isolation)
+        << "Actor resource isolation requires resource isolation to be enabled.";
     return std::make_unique<NoopCgroupManager>();
   }
 
@@ -85,7 +88,8 @@ std::unique_ptr<CgroupManagerInterface> CgroupManagerFactory::Create(
                             system_memory_bytes_low,
                             user_memory_high_bytes,
                             user_memory_max_bytes,
-                            std::make_unique<SysFsCgroupDriver>());
+                            std::make_unique<SysFsCgroupDriver>(),
+                            enable_actor_resource_isolation);
 
   RAY_CHECK(cgroup_manager_s.ok()) << absl::StrFormat(
       "Failed to start CgroupManager due to %s.", cgroup_manager_s.ToString());

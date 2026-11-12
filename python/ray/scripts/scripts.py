@@ -757,6 +757,14 @@ Windows powershell users need additional escaping:
     "cpu controllers must also be enabled.",
 )
 @click.option(
+    "--enable-actor-resource-isolation",
+    required=False,
+    is_flag=True,
+    default=False,
+    help="Create a dedicated cgroup for each Actor worker and enforce the Actor's "
+    "declared CPU and memory resources. Requires --enable-resource-isolation.",
+)
+@click.option(
     "--system-reserved-cpu",
     required=False,
     type=float,
@@ -840,6 +848,7 @@ def start(
     labels_file,
     include_log_monitor,
     enable_resource_isolation,
+    enable_actor_resource_isolation,
     system_reserved_cpu,
     system_reserved_memory,
     cgroup_path,
@@ -893,6 +902,7 @@ def start(
 
     resource_isolation_config = ResourceIsolationConfig(
         enable_resource_isolation=enable_resource_isolation,
+        enable_actor_resource_isolation=enable_actor_resource_isolation,
         cgroup_path=cgroup_path,
         system_reserved_cpu=system_reserved_cpu,
         system_reserved_memory=system_reserved_memory,

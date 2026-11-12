@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "ray/common/cgroup2/cgroup_driver_interface.h"
@@ -66,7 +67,8 @@ class CgroupManager : public CgroupManagerInterface {
       const int64_t system_memory_bytes_low,
       const int64_t user_memory_high_bytes,
       const int64_t user_memory_max_bytes,
-      std::unique_ptr<CgroupDriverInterface> cgroup_driver);
+      std::unique_ptr<CgroupDriverInterface> cgroup_driver,
+      bool enable_actor_resource_isolation = false);
 
   // Uncopyable type.
   CgroupManager(const CgroupManager &) = delete;
@@ -112,6 +114,14 @@ class CgroupManager : public CgroupManagerInterface {
     @return Status::NotFound if the system cgroup does not exist.
   */
   Status AddProcessToSystemCgroup(const std::string &pid) override;
+
+  Status CreateActorWorkerCgroup(const std::string &actor_id,
+                                 const std::string &worker_id,
+                                 const std::string &pid,
+                                 double cpu_limit,
+                                 int64_t memory_limit_bytes) override;
+
+  Status RemoveActorWorkerCgroup(const std::string &worker_id) override;
 
   /**
     @return the path to the system cgroup.
@@ -161,6 +171,7 @@ class CgroupManager : public CgroupManagerInterface {
  private:
   CgroupManager(std::string base_cgroup,
                 const std::string &node_id,
+                bool enable_actor_resource_isolation,
                 std::unique_ptr<CgroupDriverInterface> cgroup_driver);
 
   /**
@@ -214,6 +225,8 @@ class CgroupManager : public CgroupManagerInterface {
                     const int64_t user_memory_high_bytes,
                     const int64_t user_memory_max_bytes);
 
+  Status CleanupActorWorkerCgroup(const std::string &worker_id);
+
   // The Register* methods register a callback that will execute in the destructor
   // in FILO order. All callbacks required the cgroup_driver_ to be available to
   // remove the cgroup hierarchy.
@@ -231,7 +244,10 @@ class CgroupManager : public CgroupManagerInterface {
   std::string system_leaf_cgroup_;
   std::string user_cgroup_;
   std::string workers_cgroup_;
+  std::string actor_workers_cgroup_;
   std::string non_ray_cgroup_;
+  bool actor_resource_isolation_enabled_;
+  std::unordered_map<std::string, std::string> actor_worker_cgroups_;
 
   // This will be popped in reverse order to clean up all side-effects performed
   // during setup.
